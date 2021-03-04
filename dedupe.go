@@ -72,6 +72,7 @@ func Dedupe(domains []string, concurrency int) {
 	var headers = []string{"User-Agent: Mozilla", "X-Forwarded-For: 127.0.0.1"}
 	mutex := &sync.RWMutex{}
 	var map_keys []string;
+	var list2xx, list3xx,  list4xx, listxx []string;
 	
 	for i:=0; i < concurrency; i++ {
 		mainWG.Add(1);
@@ -158,11 +159,13 @@ func Dedupe(domains []string, concurrency int) {
 			matches = append(matches, curr_url)
 		}
 		delete(Map2xx, curr_url)
-		uniques = append(uniques, matches...)
+		list2xx = append(list2xx, matches...)
 	}
+	uniques = append(uniques, list2xx...)
 
 
 	// status 3xx
+	list3xx = MapKeys(Map3xx)
 
 	// status 4xx
 	map_keys = MapKeys(Map4xx)
@@ -204,8 +207,9 @@ func Dedupe(domains []string, concurrency int) {
 			matches = append(matches, curr_url)
 		}
 		delete(Map4xx, curr_url)
-		uniques = append(uniques, matches...)
+		list4xx = append(list4xx, matches...)
 	}
+	uniques = append(uniques, list4xx...)
 	
 	// status 500, 1xx and others
 	map_keys = MapKeys(Mapxx)
@@ -247,32 +251,34 @@ func Dedupe(domains []string, concurrency int) {
 			matches = append(matches, curr_url)
 		}
 		delete(Mapxx, curr_url)
-		uniques = append(uniques, matches...)
+		listxx = append(listxx, matches...)
 	}
+	uniques = append(uniques, listxx...)
 
-	if Out2xx != "" {
-		if _, err := writeToFile(MapKeys(Map2xx), Out2xx); err != nil {
+	if Out2xx != "" && len(list2xx) > 0 {
+		fmt.Println(list2xx, Out2xx, Map2xx)
+		if _, err := writeToFile(list2xx, Out2xx); err != nil {
 			fmt.Println("Cannot Write to output file for 2xx status ",Out2xx)
 			fmt.Println(err)
 			return;
 		}
 	}
-	if Out3xx != "" {
-		if _, err := writeToFile(MapKeys(Map3xx), Out3xx); err != nil {
+	if Out3xx != "" && len(list3xx) > 0 {
+		if _, err := writeToFile(list3xx, Out3xx); err != nil {
 			fmt.Println("Cannot Write to output file for 3xx status ",Out3xx)
 			fmt.Println(err)
 			return;
 		}
 	}
-	if Out4xx != "" {
-		if _, err := writeToFile(MapKeys(Map4xx), Out4xx); err != nil {
+	if Out4xx != "" && len(list4xx) > 0 {
+		if _, err := writeToFile(list4xx, Out4xx); err != nil {
 			fmt.Println("Cannot write to output file for 4xx status", Out4xx)
 			fmt.Println(err)
 			return;
 		}
 	}
-	if Outxx != "" {
-		if _, err := writeToFile(MapKeys(Mapxx), Outxx); err != nil {
+	if Outxx != "" && len(listxx) > 0 {
+		if _, err := writeToFile(listxx, Outxx); err != nil {
 			fmt.Println("Cannot write to output file for xx status", Outxx)
 			fmt.Println(err)
 			return;
