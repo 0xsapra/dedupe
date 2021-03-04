@@ -30,6 +30,7 @@ var Map3xx = make(map[string]*Response) // {url: response} code = 3xx
 var Map4xx = make(map[string]*Response) // {url: response} code = 4xx
 var Mapxx = make(map[string]*Response) // {url: response} other code
 var MAX_UNIQUES = 3 // 1 means remove any duplicate, 2 means we will 2 uniques subs. It prefers https over http
+var Out2xx, Out3xx, Out4xx, Outxx string
 
 var uniques []string
 
@@ -42,6 +43,11 @@ func main() {
 	flag.IntVar(&Concurrency, "c", 30, "set the concurrency level (split equally between HTTPS and HTTP requests)")
 	// proxy url
 	flag.StringVar(&ProxyUrl, "x", "", "Proxy url in format-> http://127.0.0.1:8080")
+	// output folder
+	flag.StringVar(&Out2xx, "o2xx", "", "Output Location for 2xx status")
+	flag.StringVar(&Out3xx, "o3xx", "", "Output Location for 3xx status")
+	flag.StringVar(&Out4xx, "o4xx", "", "Output Location for 4xx status")
+	flag.StringVar(&Outxx, "oxx", "", "Output Location for 5xx and other status")
 
 	flag.Parse()
 
@@ -244,10 +250,37 @@ func Dedupe(domains []string, concurrency int) {
 		uniques = append(uniques, matches...)
 	}
 
+	if Out2xx != "" {
+		if _, err := writeToFile(MapKeys(Map2xx), Out2xx); err != nil {
+			fmt.Println("Cannot Write to output file for 2xx status ",Out2xx)
+			fmt.Println(err)
+			return;
+		}
+	}
+	if Out3xx != "" {
+		if _, err := writeToFile(MapKeys(Map3xx), Out3xx); err != nil {
+			fmt.Println("Cannot Write to output file for 3xx status ",Out3xx)
+			fmt.Println(err)
+			return;
+		}
+	}
+	if Out4xx != "" {
+		if _, err := writeToFile(MapKeys(Map4xx), Out4xx); err != nil {
+			fmt.Println("Cannot write to output file for 4xx status", Out4xx)
+			fmt.Println(err)
+			return;
+		}
+	}
+	if Outxx != "" {
+		if _, err := writeToFile(MapKeys(Mapxx), Outxx); err != nil {
+			fmt.Println("Cannot write to output file for xx status", Outxx)
+			fmt.Println(err)
+			return;
+		}
+	}
 	for _, domain := range(uniques) {
 		fmt.Println(domain)
 	}
-	
 }
 
 
@@ -373,4 +406,33 @@ func MapKeys(keymap map[string]*Response) []string {
 	}
 
 	return keys
+}
+
+func writeToFile(words []string, filePath string) (bool, error) {
+
+	if filePath == "-" {
+
+		for _, word := range(words) {
+			fmt.Println(word)
+		}
+
+		return true, nil;
+	}
+
+	f, err := os.Create(filePath)
+
+	if err != nil {
+        return false, err
+    }
+	defer f.Close()
+
+	for _, word := range words {
+
+        _, err := f.WriteString(word + "\n")
+
+        if err != nil {
+            continue
+        }
+    }
+	return true, nil
 }
