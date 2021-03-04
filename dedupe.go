@@ -1,7 +1,6 @@
 package main
 
 import (
-	// "encoding/base64"
 	"fmt"
 	"bufio"
 	"crypto/tls"
@@ -9,20 +8,31 @@ import (
 	"net/url"
 	"flag"
 	"net"
-	"errors"
 	"strings"
 	"net/http"
 	"time"
 	"os"
-	"io/ioutil"
 	"io"
 
 	"github.com/pmezard/go-difflib/difflib"
 	"golang.org/x/net/html"
 )
 
+type Response struct {
+    pageStructure []string
+    headers  http.Header
+	status int
+}
 
-var SiteSourcecodeMap = make(map[string][]string)
+var urlStatusCodeMap = make(map[string]int) // {url: 200, url1: 300}
+var Map2xx = make(map[string]*Response) // {url: response} code = 2xx
+var Map3xx = make(map[string]*Response) // {url: response} code = 3xx
+var Map4xx = make(map[string]*Response) // {url: response} code = 4xx
+var Mapxx = make(map[string]*Response) // {url: response} other code
+var MAX_UNIQUES = 3 // 1 means remove any duplicate, 2 means we will 2 uniques subs. It prefers https over http
+
+var uniques []string
+
 var Concurrency int
 var ProxyUrl string // proxy url 
 
@@ -53,41 +63,39 @@ func Dedupe(domains []string, concurrency int) {
 	
 	var mainWG = &sync.WaitGroup{}
 	var client = getHttpClient(ProxyUrl)
-	var headers = []string{}
+	var headers = []string{"User-Agent: Mozilla", "X-Forwarded-For: 127.0.0.1"}
 	mutex := &sync.RWMutex{}
+	var map_keys []string;
 	
-	for i:=0; i < Concurrency; i++ {
+	for i:=0; i < concurrency; i++ {
 		mainWG.Add(1);
 
 		go func () {
 			for url := range urlChannel {
+				
+				var statusRounded int
+				response, _ := HttpRequest(client, url, "GET", headers)
+				statusRounded = (response.status / 100) * 100
 
-				if found, _ := SiteSourcecodeMap[url]; found != nil {
-					continue;
-				}
-				mutex.RLock()
-				var totalDomainsInMap = len(SiteSourcecodeMap)
-				mutex.RUnlock()
+				mutex.Lock()
+				if statusRounded == 200 {
+					urlStatusCodeMap[url] = 200
+					Map2xx[url] = response
 
-				currentResponseBody, err := HttpRequest(client, url, "GET", headers);
+				} else if statusRounded == 300 {
+					urlStatusCodeMap[url] = 300
+					Map3xx[url] = response
 
-				if totalDomainsInMap == 0 || err != nil {
-					mutex.Lock()
-					SiteSourcecodeMap[url] = currentResponseBody;
-					mutex.Unlock()
+				} else if statusRounded == 400 {
+					urlStatusCodeMap[url] = 400
+					Map4xx[url] = response
+
 				} else {
-					mutex.Lock()
-					for url, otherResponse := range(SiteSourcecodeMap) {
-						if matchRatio := GetSimilarity(currentResponseBody, otherResponse); matchRatio > 0.95 {
-							// this is almost same
-						} else {
-							SiteSourcecodeMap[url] = currentResponseBody;
-						}
-					}
-					mutex.Unlock()
+					urlStatusCodeMap[url] = 0
+					Mapxx[url] = response
 				}
+				mutex.Unlock()
 			}
-
 			mainWG.Done();
 		}();
 	}
@@ -101,11 +109,146 @@ func Dedupe(domains []string, concurrency int) {
 	close(urlChannel)
 	mainWG.Wait()
 
-	for domain, _ := range(SiteSourcecodeMap) {
-		fmt.Println(domain)
+	// Status code 2xx's
+	// Group similar 200
+	// prefer https
+	map_keys = MapKeys(Map2xx)
+	
+	for i:=0; i < len(map_keys); i++ {
+		curr_url := map_keys[i]
+		curr_res, found := Map2xx[curr_url]
+		
+		if found == false {
+			continue
+		}
+		var matches = make([]string, 0)
+
+		for j:=i+1; j < len(map_keys); j++ { 
+			other_url := map_keys[j]
+			other_res, found := Map2xx[other_url]
+			if found == false {
+				continue
+			}
+
+			if len(matches) < MAX_UNIQUES {
+				if (GetSimilarity(curr_res.pageStructure, other_res.pageStructure) > 0.96 ) {
+					matches = append(matches, other_url)
+					delete(Map2xx, other_url)
+				}
+			} else if len(matches) >= MAX_UNIQUES && len(matches) < MAX_UNIQUES + 2 { // Add 2 more https only
+				u, _ := url.Parse(other_url)
+				if u.Scheme == "https" {
+					if (GetSimilarity(curr_res.pageStructure, other_res.pageStructure) > 0.96 ) {
+						matches = append(matches, other_url)
+						delete(Map2xx, other_url)
+					}
+				}
+				
+			} else {
+				break
+			}
+		}
+		if len(matches) < MAX_UNIQUES {
+			matches = append(matches, curr_url)
+		}
+		delete(Map2xx, curr_url)
+		uniques = append(uniques, matches...)
 	}
 
+
+	// status 3xx
+
+	// status 4xx
+	map_keys = MapKeys(Map4xx)
+
+	for i:=0; i < len(map_keys); i++ {
+		curr_url := map_keys[i]
+		curr_res, found := Map4xx[curr_url]
+		
+		if found == false {
+			continue
+		}
+		var matches = make([]string, 0)
+	
+		for j:=i+1; j < len(map_keys); j++ { 
+			other_url := map_keys[j]
+			other_res, found := Map4xx[other_url]
+			if found == false {
+				continue
+			}
+	
+			if len(matches) < MAX_UNIQUES {
+				if (GetSimilarity(curr_res.pageStructure, other_res.pageStructure) > 0.97 ) {
+					matches = append(matches, other_url)
+					delete(Map4xx, other_url)
+				}
+			} else if len(matches) >= MAX_UNIQUES && len(matches) < MAX_UNIQUES + 2 { // Add 2 more https only
+				u, _ := url.Parse(other_url)
+				if u.Scheme == "https" {
+					if (GetSimilarity(curr_res.pageStructure, other_res.pageStructure) > 0.97 ) {
+						matches = append(matches, other_url)
+						delete(Map4xx, other_url)
+					}
+				}
+				
+			} else {
+				break
+			}
+		}
+		if len(matches) < MAX_UNIQUES {
+			matches = append(matches, curr_url)
+		}
+		delete(Map4xx, curr_url)
+		uniques = append(uniques, matches...)
+	}
+	
+	// status 500, 1xx 
+	map_keys = MapKeys(Mapxx)
+
+	for i:=0; i < len(map_keys); i++ {
+		curr_url := map_keys[i]
+		curr_res, found := Mapxx[curr_url]
+		
+		if found == false {
+			continue
+		}
+		var matches = make([]string, 0)
+	
+		for j:=i+1; j < len(map_keys); j++ { 
+			other_url := map_keys[j]
+			other_res, found := Mapxx[other_url]
+			if found == false {
+				continue
+			}
+	
+			if len(matches) < MAX_UNIQUES + 5 {
+				if (GetSimilarity(curr_res.pageStructure, other_res.pageStructure) > 0.97 ) {
+					matches = append(matches, other_url)
+					delete(Mapxx, other_url)
+				}
+			} else if len(matches) >= MAX_UNIQUES && len(matches) < MAX_UNIQUES + 4 { // Add 2 more https only
+				u, _ := url.Parse(other_url)
+				if u.Scheme == "https" {
+					if (GetSimilarity(curr_res.pageStructure, other_res.pageStructure) > 0.97 ) {
+						matches = append(matches, other_url)
+						delete(Mapxx, other_url)
+					}
+				}
+			} else {
+				break
+			}
+		}
+		if len(matches) < MAX_UNIQUES {
+			matches = append(matches, curr_url)
+		}
+		delete(Mapxx, curr_url)
+		uniques = append(uniques, matches...)
+	}
+
+	fmt.Println(uniques)
+	
 }
+
 
 func getHttpClient(ProxyUrl string) *http.Client {
 	var tr *http.Transport;
@@ -160,12 +303,12 @@ func GetSimilarity(a, b []string) float64 {
 	return matcher.Ratio()
 }
 
-func HttpRequest(client *http.Client, domain string, method string, headers []string) ([]string, error) {
+func HttpRequest(client *http.Client, domain string, method string, headers []string) (*Response, error) {
 	req, err := http.NewRequest(method, domain, nil)
-	var emptyResponse = []string{};
+	var emptyResponse = Response{};
 
 	if err != nil {
-		return emptyResponse, err
+		return &emptyResponse, err
 	}
 
 	for _, header := range(headers) {
@@ -183,25 +326,17 @@ func HttpRequest(client *http.Client, domain string, method string, headers []st
 	resp, err := client.Do(req)
 
 	if err != nil {
-		return emptyResponse, err
+		return &emptyResponse, err
 	}
 	defer resp.Body.Close()
 
-	bytes, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return emptyResponse, err
-	}
-	bodyString := string(bytes)
-
-	if bodyString == "" {
-		return emptyResponse, errors.New("DONOTPARSE")
-	}
-
 	htmlTokens, err := GetPageStructure(resp.Body)
 	if err != nil {
-		return emptyResponse, err
+		return &emptyResponse, err
 	}
-	return htmlTokens, nil
+	response := Response{headers: resp.Header, status: resp.StatusCode, pageStructure: htmlTokens}
+
+	return &response, nil
 }
 
 func GetPageStructure(body io.Reader) ([]string, error) {
@@ -224,4 +359,17 @@ func GetPageStructure(body io.Reader) ([]string, error) {
 			}
 		}
 	}
+}
+
+func MapKeys(keymap map[string]*Response) []string {
+
+	var keys = make([]string, len(keymap))
+	var i int32 = 0
+
+	for val, _ := range(keymap) {
+		keys[i] = val
+		i += 1
+	}
+
+	return keys
 }
