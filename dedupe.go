@@ -245,7 +245,9 @@ func Dedupe(domains []string, concurrency int) {
 		uniques = append(uniques, matches...)
 	}
 
-	fmt.Println(uniques)
+	for domain, _ := range(uniques) {
+		fmt.Println(domain)
+	}
 	
 }
 
