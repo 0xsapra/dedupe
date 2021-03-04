@@ -176,7 +176,7 @@ func Dedupe(domains []string, concurrency int) {
 			if found == false {
 				continue
 			}
-	
+			
 			if len(matches) < MAX_UNIQUES {
 				if (GetSimilarity(curr_res.pageStructure, other_res.pageStructure) > 0.97 ) {
 					matches = append(matches, other_url)
@@ -184,13 +184,12 @@ func Dedupe(domains []string, concurrency int) {
 				}
 			} else if len(matches) >= MAX_UNIQUES && len(matches) < MAX_UNIQUES + 2 { // Add 2 more https only
 				u, _ := url.Parse(other_url)
-				if u.Scheme == "https" {
-					if (GetSimilarity(curr_res.pageStructure, other_res.pageStructure) > 0.97 ) {
+				if (GetSimilarity(curr_res.pageStructure, other_res.pageStructure) > 0.97 ) {
+					if u.Scheme == "https" {
 						matches = append(matches, other_url)
-						delete(Map4xx, other_url)
 					}
+					delete(Map4xx, other_url)
 				}
-				
 			} else {
 				break
 			}
@@ -202,7 +201,7 @@ func Dedupe(domains []string, concurrency int) {
 		uniques = append(uniques, matches...)
 	}
 	
-	// status 500, 1xx 
+	// status 500, 1xx and others
 	map_keys = MapKeys(Mapxx)
 
 	for i:=0; i < len(map_keys); i++ {
@@ -245,7 +244,7 @@ func Dedupe(domains []string, concurrency int) {
 		uniques = append(uniques, matches...)
 	}
 
-	for domain, _ := range(uniques) {
+	for _, domain := range(uniques) {
 		fmt.Println(domain)
 	}
 	
